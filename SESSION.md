@@ -1,0 +1,1 @@
+- macOS + `-Clinker-plugin-lto` + `-fuse-ld=lld` currently fails because `ld64.lld` rejects rustc-emitted `-plugin-opt=...` linker options.

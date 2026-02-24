@@ -1,0 +1,12 @@
+[package]
+name = "hermes"
+version = "0.1.0"
+edition = "2024"
+
+[build-dependencies]
+bindgen = "0.72.1"
+cc = "1.2.56"
+
+[dependencies]
+serde_json = "1.0.145"
+sqlite = "0.37.0"
