@@ -148,6 +148,12 @@ pub struct MasscanCommand<Mode> {
     _mode: PhantomData<Mode>,
 }
 
+impl Default for MasscanCommand<ModeUnset> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MasscanCommand<ModeUnset> {
     pub fn new() -> Self {
         Self {

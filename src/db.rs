@@ -36,8 +36,6 @@ pub fn persist_scan_results(db_path: &str, records: &[PortStatusRecord]) -> Resu
     let mut connection = SqliteConnection::establish(db_path)
         .map_err(|err| format!("failed to open sqlite database {db_path}: {err}"))?;
 
-    // Keep schema bootstrap inline so the binary can run without a separate
-    // migration step while we iterate on scanner behavior.
     diesel::sql_query(
         "CREATE TABLE IF NOT EXISTS scan_results (\
             id INTEGER PRIMARY KEY AUTOINCREMENT,\

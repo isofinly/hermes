@@ -10,10 +10,6 @@ pub struct PortStatusRecord {
     pub reason: String,
 }
 
-pub fn parse_ndjson(ndjson_content: &str) -> Result<Vec<PortStatusRecord>, String> {
-    parse_ndjson_with_threads(ndjson_content, 1)
-}
-
 pub fn parse_ndjson_with_threads(
     ndjson_content: &str,
     thread_count: usize,

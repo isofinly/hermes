@@ -213,6 +213,7 @@ fn build_email_config(cli: &Cli) -> Result<Option<EmailConfig>, String> {
     }))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_masscan_workers(
     targets: Vec<TargetSpec>,
     ports: PortSelection,
