@@ -1,12 +1,14 @@
 use std::num::{NonZeroU16, NonZeroU64};
 
+use hermes::db::persist_scan_results;
 use hermes::masscan_cli::{
     MasscanCommand, MasscanError, NonEmptyList, PortSelection, PortSpec, TargetSpec,
 };
-use hermes::results::pretty_print_ndjson;
+use hermes::results::{parse_ndjson, pretty_print_records};
 
 fn main() {
     let output_path = "results.ndjson";
+    let database_path = "results.sqlite3";
 
     let targets = TargetSpec::new("127.0.0.1/24").map(NonEmptyList::new);
     let ports = build_example_ports();
@@ -28,7 +30,17 @@ fn main() {
 
     if let Err(err) = command
         .and_then(|command| command.invoke().map_err(|err| err.to_string()))
-        .and_then(|_| pretty_print_ndjson(output_path))
+        .and_then(|_| parse_ndjson(output_path))
+        .and_then(|rows| {
+            pretty_print_records(&rows);
+            persist_scan_results(database_path, &rows)
+                .map(|saved_count| {
+                    if saved_count > 0 {
+                        println!("Saved {saved_count} scan rows into {database_path}");
+                    }
+                })
+                .map_err(|err| err.to_string())
+        })
     {
         eprintln!("{err}");
         std::process::exit(1);
