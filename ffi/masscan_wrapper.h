@@ -1,5 +1,5 @@
-#ifndef TRACK2_MASSCAN_WRAPPER_H
-#define TRACK2_MASSCAN_WRAPPER_H
+#ifndef HERMES_MASSCAN_WRAPPER_H
+#define HERMES_MASSCAN_WRAPPER_H
 
 // This wrapper intentionally includes only masscan's public header to keep
 // bindgen input deterministic.

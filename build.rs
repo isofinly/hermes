@@ -11,8 +11,7 @@ fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR is set by cargo"));
 
     // Build Masscan C sources into a static library.
-    // We rename C entrypoint from `main` to `masscan_cli_main` in `ffi/masscan_entry.c`
-    // so Rust can invoke it directly
+    // We renamed C entrypoint from `main` to `masscan_cli_main` in `ffi/masscan_entry.c`
     let mut c_sources: Vec<PathBuf> = fs::read_dir("masscan/src")
         .expect("masscan/src should exist")
         .flatten()
