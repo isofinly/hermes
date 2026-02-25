@@ -3,7 +3,6 @@ use std::fs;
 use std::path::PathBuf;
 
 fn main() {
-    // Regenerate bindings when masscan headers or wrapper change.
     println!("cargo:rerun-if-changed=ffi/masscan_wrapper.h");
     println!("cargo:rerun-if-changed=ffi/masscan_entry.c");
     println!("cargo:rerun-if-changed=masscan/src/masscan.h");
@@ -11,17 +10,16 @@ fn main() {
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR is set by cargo"));
 
-    // Build Masscan C sources into a static library and rename C entrypoint
-    // from `main` to `masscan_cli_main` so Rust can invoke it directly.
+    // Build Masscan C sources into a static library.
+    // We rename C entrypoint from `main` to `masscan_cli_main` in `ffi/masscan_entry.c`
+    // so Rust can invoke it directly
     let mut c_sources: Vec<PathBuf> = fs::read_dir("masscan/src")
         .expect("masscan/src should exist")
         .flatten()
         .map(|entry| entry.path())
         .filter(|path| {
             path.extension().is_some_and(|ext| ext == "c")
-                && path
-                    .file_name()
-                    .is_none_or(|name| name != "main.c")
+                && path.file_name().is_none_or(|name| name != "main.c")
         })
         .collect();
 

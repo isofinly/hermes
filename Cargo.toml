@@ -8,5 +8,6 @@ bindgen = "0.72.1"
 cc = "1.2.56"
 
 [dependencies]
+diesel = { version = "2.2.6", features = ["sqlite"] }
 serde_json = "1.0.145"
 sqlite = "0.37.0"

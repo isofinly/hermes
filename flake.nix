@@ -23,13 +23,14 @@
           inherit system overlays;
         };
 
-        ccPath = if pkgs.stdenv.isDarwin then "/usr/bin/clang" else "${pkgs.clang}/bin/clang";
-        cxxPath = if pkgs.stdenv.isDarwin then "/usr/bin/clang++" else "${pkgs.clang}/bin/clang++";
+        ccPath = "${pkgs.clang}/bin/clang";
+        cxxPath = "${pkgs.clang}/bin/clang++";
 
-        # On Darwin, `ld64.lld` currently rejects rustc's LTO plugin options
+        # On Darwin, `ld64.lld` currently rejects rustc's LTO plugin options.
+        # Keep nix clang wrapper + default Apple linker for reliable SDK linking.
         rustFlags =
           if pkgs.stdenv.isDarwin then
-            "-Clinker=clang -Clink-arg=-fuse-ld=lld"
+            "-Clinker=clang"
           else
             "-Clinker-plugin-lto -Clinker=clang -Clink-arg=-fuse-ld=lld";
 
@@ -65,18 +66,36 @@
           ];
 
           env = {
-            OUT_DIR = "~/.cargo-target/proto";
-
             CC = ccPath;
             CXX = cxxPath;
+            HOST_CC = ccPath;
+            HOST_CXX = cxxPath;
+
+            # `cc` crate prefers target-scoped compilers when cross-args are present.
+            # Setting these avoids falling back to nix's wrapped `clang` on Darwin.
+            CC_aarch64_apple_darwin = ccPath;
+            CXX_aarch64_apple_darwin = cxxPath;
 
             RUSTFLAGS = rustFlags;
+
+            # On Darwin, `cc` crate's default target flags trigger noisy
+            # cc-wrapper host/target mismatch warnings.
+            CRATE_CC_NO_DEFAULTS = if pkgs.stdenv.isDarwin then "1" else "0";
 
             LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
           };
 
           shellHook = ''
             set -e
+
+            export CC="${ccPath}"
+            export CXX="${cxxPath}"
+            export HOST_CC="${ccPath}"
+            export HOST_CXX="${cxxPath}"
+            export CC_FOR_TARGET="${ccPath}"
+            export CXX_FOR_TARGET="${cxxPath}"
+            export CC_aarch64_apple_darwin="${ccPath}"
+            export CXX_aarch64_apple_darwin="${cxxPath}"
 
             rust_llvm_version=$(rustc -vV | sed -n 's/^LLVM version: //p')
             clang_llvm_version=$(clang --version | sed -n 's/.*version \([0-9][0-9]*\.[0-9][0-9]*\(\.[0-9][0-9]*\)\?\).*/\1/p' | head -n 1)
