@@ -8,5 +8,8 @@ bindgen = "0.72.1"
 cc = "1.2.56"
 
 [dependencies]
+clap = { version = "4.5.53", features = ["derive"] }
 diesel = { version = "2.2.6", features = ["sqlite"] }
+lettre = { version = "0.11.19", default-features = false, features = ["builder", "smtp-transport", "hostname", "native-tls"] }
+rayon = "1.11.0"
 serde_json = "1.0.145"

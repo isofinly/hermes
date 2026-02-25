@@ -1,5 +1,6 @@
 use std::fs;
 
+use rayon::prelude::*;
 use serde_json::Value;
 
 #[derive(Clone, Debug)]
@@ -12,97 +13,36 @@ pub struct PortStatusRecord {
 }
 
 pub fn parse_ndjson(output_path: &str) -> Result<Vec<PortStatusRecord>, String> {
+    parse_ndjson_with_threads(output_path, 1)
+}
+
+pub fn parse_ndjson_with_threads(
+    output_path: &str,
+    thread_count: usize,
+) -> Result<Vec<PortStatusRecord>, String> {
     let content = fs::read_to_string(output_path)
         .map_err(|err| format!("failed reading {output_path}: {err}"))?;
 
-    let mut rows = Vec::new();
+    let indexed_lines: Vec<(usize, String)> = content
+        .lines()
+        .enumerate()
+        .map(|(index, line)| (index, line.to_string()))
+        .collect();
 
-    for (line_index, line) in content.lines().enumerate() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
+    let worker_count = thread_count.max(1);
+    let thread_pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(worker_count)
+        .build()
+        .map_err(|err| format!("failed to build rayon thread pool: {err}"))?;
 
-        let parsed: Value = serde_json::from_str(trimmed)
-            .map_err(|err| format!("invalid ndjson at line {}: {err}", line_index + 1))?;
+    let chunks = thread_pool.install(|| {
+        indexed_lines
+            .par_iter()
+            .map(|(line_index, line)| parse_line(line_index + 1, line))
+            .collect::<Result<Vec<_>, _>>()
+    })?;
 
-        let ip = parsed
-            .get("ip")
-            .and_then(Value::as_str)
-            .unwrap_or("<unknown-ip>")
-            .to_string();
-
-        if let Some(ports) = parsed.get("port").and_then(Value::as_array) {
-            for port in ports {
-                let proto = port
-                    .get("proto")
-                    .and_then(Value::as_str)
-                    .unwrap_or("?")
-                    .to_string();
-                let port_number = port
-                    .get("port")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0)
-                    .try_into()
-                    .unwrap_or(0);
-                let status = port
-                    .get("status")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown")
-                    .to_string();
-                let reason = port
-                    .get("reason")
-                    .and_then(Value::as_str)
-                    .unwrap_or("n/a")
-                    .to_string();
-
-                rows.push(PortStatusRecord {
-                    ip: ip.clone(),
-                    proto,
-                    port: port_number,
-                    status,
-                    reason,
-                });
-            }
-            continue;
-        }
-
-        if parsed.get("rec_type").and_then(Value::as_str) == Some("status") {
-            let proto = parsed
-                .get("proto")
-                .and_then(Value::as_str)
-                .unwrap_or("?")
-                .to_string();
-            let port_number = parsed
-                .get("port")
-                .and_then(Value::as_u64)
-                .unwrap_or(0)
-                .try_into()
-                .unwrap_or(0);
-            let status = parsed
-                .get("data")
-                .and_then(|data| data.get("status"))
-                .and_then(Value::as_str)
-                .unwrap_or("unknown")
-                .to_string();
-            let reason = parsed
-                .get("data")
-                .and_then(|data| data.get("reason"))
-                .and_then(Value::as_str)
-                .unwrap_or("n/a")
-                .to_string();
-
-            rows.push(PortStatusRecord {
-                ip,
-                proto,
-                port: port_number,
-                status,
-                reason,
-            });
-        }
-    }
-
-    Ok(rows)
+    Ok(chunks.into_iter().flatten().collect())
 }
 
 pub fn pretty_print_records(records: &[PortStatusRecord]) {
@@ -128,4 +68,82 @@ pub fn pretty_print_ndjson(output_path: &str) -> Result<(), String> {
     let rows = parse_ndjson(output_path)?;
     pretty_print_records(&rows);
     Ok(())
+}
+
+fn parse_line(line_number: usize, line: &str) -> Result<Vec<PortStatusRecord>, String> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let parsed: Value = serde_json::from_str(trimmed)
+        .map_err(|err| format!("invalid ndjson at line {line_number}: {err}"))?;
+
+    let ip = parsed
+        .get("ip")
+        .and_then(Value::as_str)
+        .unwrap_or("<unknown-ip>")
+        .to_string();
+
+    if let Some(ports) = parsed.get("port").and_then(Value::as_array) {
+        let records = ports
+            .iter()
+            .map(|port| PortStatusRecord {
+                ip: ip.clone(),
+                proto: port
+                    .get("proto")
+                    .and_then(Value::as_str)
+                    .unwrap_or("?")
+                    .to_string(),
+                port: port
+                    .get("port")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+                    .try_into()
+                    .unwrap_or(0),
+                status: port
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown")
+                    .to_string(),
+                reason: port
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .unwrap_or("n/a")
+                    .to_string(),
+            })
+            .collect();
+        return Ok(records);
+    }
+
+    if parsed.get("rec_type").and_then(Value::as_str) == Some("status") {
+        return Ok(vec![PortStatusRecord {
+            ip,
+            proto: parsed
+                .get("proto")
+                .and_then(Value::as_str)
+                .unwrap_or("?")
+                .to_string(),
+            port: parsed
+                .get("port")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                .try_into()
+                .unwrap_or(0),
+            status: parsed
+                .get("data")
+                .and_then(|data| data.get("status"))
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+                .to_string(),
+            reason: parsed
+                .get("data")
+                .and_then(|data| data.get("reason"))
+                .and_then(Value::as_str)
+                .unwrap_or("n/a")
+                .to_string(),
+        }]);
+    }
+
+    Ok(Vec::new())
 }
