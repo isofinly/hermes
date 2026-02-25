@@ -1,5 +1,3 @@
-use std::fs;
-
 use rayon::prelude::*;
 use serde_json::Value;
 
@@ -12,18 +10,15 @@ pub struct PortStatusRecord {
     pub reason: String,
 }
 
-pub fn parse_ndjson(output_path: &str) -> Result<Vec<PortStatusRecord>, String> {
-    parse_ndjson_with_threads(output_path, 1)
+pub fn parse_ndjson(ndjson_content: &str) -> Result<Vec<PortStatusRecord>, String> {
+    parse_ndjson_with_threads(ndjson_content, 1)
 }
 
 pub fn parse_ndjson_with_threads(
-    output_path: &str,
+    ndjson_content: &str,
     thread_count: usize,
 ) -> Result<Vec<PortStatusRecord>, String> {
-    let content = fs::read_to_string(output_path)
-        .map_err(|err| format!("failed reading {output_path}: {err}"))?;
-
-    let indexed_lines: Vec<(usize, String)> = content
+    let indexed_lines: Vec<(usize, String)> = ndjson_content
         .lines()
         .enumerate()
         .map(|(index, line)| (index, line.to_string()))
@@ -62,12 +57,6 @@ pub fn pretty_print_records(records: &[PortStatusRecord]) {
             row.ip, row.proto, port_label, row.status, row.reason
         );
     }
-}
-
-pub fn pretty_print_ndjson(output_path: &str) -> Result<(), String> {
-    let rows = parse_ndjson(output_path)?;
-    pretty_print_records(&rows);
-    Ok(())
 }
 
 fn parse_line(line_number: usize, line: &str) -> Result<Vec<PortStatusRecord>, String> {

@@ -2,6 +2,7 @@ use std::ffi::CString;
 use std::marker::PhantomData;
 use std::num::{NonZeroU16, NonZeroU64};
 use std::os::raw::c_char;
+use std::process::{Command, Stdio};
 
 use crate::masscan_api::raw::masscan_cli_main;
 
@@ -11,6 +12,8 @@ pub enum MasscanError {
     InvalidPortRange { start: u16, end: u16 },
     ArgumentContainsNul(String),
     NonZeroExit(i32),
+    SpawnFailed(String),
+    InvalidUtf8Output(String),
 }
 
 impl std::fmt::Display for MasscanError {
@@ -23,8 +26,14 @@ impl std::fmt::Display for MasscanError {
             Self::ArgumentContainsNul(value) => write!(f, "argument contains NUL byte: {value}"),
             Self::NonZeroExit(code) => write!(
                 f,
-                "masscan API returned non-zero exit code: {code}. If this is a permission error, retry under sudo"
+                "masscan returned non-zero exit code: {code}. If this is a permission error, retry under sudo"
             ),
+            Self::SpawnFailed(message) => {
+                write!(f, "failed to spawn masscan subprocess: {message}")
+            }
+            Self::InvalidUtf8Output(message) => {
+                write!(f, "masscan produced non-UTF8 stdout: {message}")
+            }
         }
     }
 }
@@ -237,6 +246,29 @@ impl<Mode> MasscanCommand<Mode> {
         }
 
         Ok(())
+    }
+
+    pub fn invoke_subprocess_capture_stdout(&self) -> Result<String, MasscanError> {
+        let program = self
+            .args
+            .first()
+            .ok_or_else(|| MasscanError::SpawnFailed("missing executable name".to_string()))?;
+
+        let output = Command::new(program)
+            .args(self.args.iter().skip(1))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .output()
+            .map_err(|err| MasscanError::SpawnFailed(err.to_string()))?;
+
+        if !output.status.success() {
+            return Err(MasscanError::NonZeroExit(
+                output.status.code().unwrap_or(-1),
+            ));
+        }
+
+        String::from_utf8(output.stdout)
+            .map_err(|err| MasscanError::InvalidUtf8Output(err.to_string()))
     }
 }
 

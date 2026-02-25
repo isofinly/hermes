@@ -1,4 +1,5 @@
 use std::num::{NonZeroU16, NonZeroU64};
+use std::thread;
 
 use clap::Parser;
 use hermes::db::persist_scan_results;
@@ -6,7 +7,7 @@ use hermes::masscan_cli::{
     MasscanCommand, MasscanError, NonEmptyList, PortSelection, PortSpec, TargetSpec,
 };
 use hermes::notifications::{EmailConfig, send_results_email};
-use hermes::results::{parse_ndjson_with_threads, pretty_print_records};
+use hermes::results::{PortStatusRecord, parse_ndjson_with_threads, pretty_print_records};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Masscan runner with SQLite persistence")]
@@ -26,16 +27,16 @@ struct Cli {
     #[arg(long, default_value_t = 0)]
     wait: u32,
 
-    #[arg(long, default_value = "results.ndjson")]
-    output: String,
-
     #[arg(long, default_value = "results.sqlite3")]
     database: String,
 
     #[arg(long, default_value_t = 1)]
+    masscan_processes: usize,
+
+    #[arg(long, default_value_t = 1)]
     parse_threads: usize,
 
-    #[arg(long = "masscan-arg")]
+    #[arg(long = "masscan-arg", allow_hyphen_values = true)]
     masscan_args: Vec<String>,
 
     #[arg(long)]
@@ -68,70 +69,63 @@ fn main() {
     let ports = parse_port_selection(&cli.ports);
     let rate = NonZeroU64::new(cli.rate).ok_or("rate must be non-zero");
 
+    if cli.masscan_processes == 0 {
+        eprintln!("--masscan-processes must be greater than zero");
+        std::process::exit(1);
+    }
+
     if cli.parse_threads == 0 {
         eprintln!("--parse-threads must be greater than zero");
         std::process::exit(1);
     }
 
-    let command = targets
+    let rows = targets
         .and_then(|targets| ports.map(|ports| (targets, ports)))
         .map_err(|err| err.to_string())
         .and_then(|(targets, ports)| {
-            rate.map_err(str::to_string).and_then(|rate| {
-                let mut command = MasscanCommand::scan(targets, ports)
-                    .rate(rate)
-                    .max_retries(cli.max_retries)
-                    .wait(cli.wait)
-                    .output_ndjson(&cli.output)
-                    .map_err(|err| err.to_string())?;
-
-                for extra_arg in &cli.masscan_args {
-                    command = command.arg(extra_arg.clone());
-                }
-
-                Ok(command)
-            })
+            rate.map_err(str::to_string)
+                .map(|rate| (targets, ports, rate))
+        })
+        .and_then(|(targets, ports, rate)| {
+            run_masscan_workers(
+                targets,
+                ports,
+                rate,
+                cli.max_retries,
+                cli.wait,
+                cli.masscan_processes,
+                cli.parse_threads,
+                &cli.masscan_args,
+            )
         });
 
-    if let Err(err) = command
-        .and_then(|command| command.invoke().map_err(|err| err.to_string()))
-        .and_then(|_| parse_ndjson_with_threads(&cli.output, cli.parse_threads))
-        .and_then(|rows| {
-            pretty_print_records(&rows);
-            persist_scan_results(&cli.database, &rows)
-                .map(|saved_count| {
-                    if saved_count > 0 {
-                        println!("Saved {saved_count} scan rows into {}", cli.database);
-                    }
-                })
-                .map_err(|err| err.to_string())?;
+    if let Err(err) = rows.and_then(|rows| {
+        pretty_print_records(&rows);
+        persist_scan_results(&cli.database, &rows)
+            .map(|saved_count| {
+                if saved_count > 0 {
+                    println!("Saved {saved_count} scan rows into {}", cli.database);
+                }
+            })
+            .map_err(|err| err.to_string())?;
 
-            if let Some(config) = email_config.as_ref().map_err(|err| err.to_string())? {
-                send_results_email(config, &rows)?;
-                println!("Sent scan results via email to {}", config.to);
-            }
+        if let Some(config) = email_config.as_ref().map_err(|err| err.to_string())? {
+            send_results_email(config, &rows)?;
+            println!("Sent scan results via email to {}", config.to);
+        }
 
-            Ok(())
-        })
-    {
+        Ok(())
+    }) {
         eprintln!("{err}");
         std::process::exit(1);
     }
 }
 
-fn build_targets(values: &[String]) -> Result<NonEmptyList<TargetSpec>, MasscanError> {
-    let mut iter = values.iter();
-    let first = iter
-        .next()
-        .ok_or(MasscanError::EmptyValue("target"))
-        .and_then(|value| TargetSpec::new(value.clone()))?;
-
-    let mut targets = NonEmptyList::new(first);
-    for value in iter {
-        targets = targets.push(TargetSpec::new(value.clone())?);
-    }
-
-    Ok(targets)
+fn build_targets(values: &[String]) -> Result<Vec<TargetSpec>, MasscanError> {
+    values
+        .iter()
+        .map(|value| TargetSpec::new(value.clone()))
+        .collect()
 }
 
 fn parse_port_selection(ports: &str) -> Result<PortSelection, MasscanError> {
@@ -217,4 +211,108 @@ fn build_email_config(cli: &Cli) -> Result<Option<EmailConfig>, String> {
         to,
         subject: cli.email_subject.clone(),
     }))
+}
+
+fn run_masscan_workers(
+    targets: Vec<TargetSpec>,
+    ports: PortSelection,
+    rate: NonZeroU64,
+    max_retries: u32,
+    wait: u32,
+    masscan_processes: usize,
+    parse_threads: usize,
+    extra_args: &[String],
+) -> Result<Vec<PortStatusRecord>, String> {
+    let target_batches = split_targets_for_workers(targets, masscan_processes)?;
+
+    thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(target_batches.len());
+
+        for target_batch in target_batches {
+            let ports = ports.clone();
+            let extra_args = extra_args.to_vec();
+            handles.push(scope.spawn(move || {
+                run_single_masscan_worker(
+                    target_batch,
+                    ports,
+                    rate,
+                    max_retries,
+                    wait,
+                    parse_threads,
+                    &extra_args,
+                )
+            }));
+        }
+
+        let mut rows = Vec::new();
+        for (worker_index, handle) in handles.into_iter().enumerate() {
+            let worker_rows = handle
+                .join()
+                .map_err(|_| format!("masscan worker {worker_index} panicked"))??;
+            rows.extend(worker_rows);
+        }
+
+        Ok(rows)
+    })
+}
+
+fn run_single_masscan_worker(
+    targets: NonEmptyList<TargetSpec>,
+    ports: PortSelection,
+    rate: NonZeroU64,
+    max_retries: u32,
+    wait: u32,
+    parse_threads: usize,
+    extra_args: &[String],
+) -> Result<Vec<PortStatusRecord>, String> {
+    let mut command = MasscanCommand::scan(targets, ports)
+        .rate(rate)
+        .max_retries(max_retries)
+        .wait(wait)
+        .output_ndjson("-")
+        .map_err(|err| err.to_string())?;
+
+    for extra_arg in extra_args {
+        command = command.arg(extra_arg);
+    }
+
+    let ndjson_output = command
+        .invoke_subprocess_capture_stdout()
+        .map_err(|err| err.to_string())?;
+    parse_ndjson_with_threads(&ndjson_output, parse_threads)
+}
+
+fn split_targets_for_workers(
+    targets: Vec<TargetSpec>,
+    masscan_processes: usize,
+) -> Result<Vec<NonEmptyList<TargetSpec>>, String> {
+    if targets.is_empty() {
+        return Err("at least one --target is required".to_string());
+    }
+
+    let worker_count = masscan_processes.min(targets.len());
+    let mut buckets: Vec<Vec<TargetSpec>> = (0..worker_count).map(|_| Vec::new()).collect();
+
+    for (index, target) in targets.into_iter().enumerate() {
+        buckets[index % worker_count].push(target);
+    }
+
+    buckets
+        .into_iter()
+        .map(non_empty_targets)
+        .collect::<Result<Vec<_>, _>>()
+}
+
+fn non_empty_targets(targets: Vec<TargetSpec>) -> Result<NonEmptyList<TargetSpec>, String> {
+    let mut iter = targets.into_iter();
+    let Some(first) = iter.next() else {
+        return Err("cannot start worker with empty target list".to_string());
+    };
+
+    let mut list = NonEmptyList::new(first);
+    for target in iter {
+        list = list.push(target);
+    }
+
+    Ok(list)
 }
