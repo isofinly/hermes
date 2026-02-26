@@ -15,7 +15,7 @@ struct Cli {
     #[arg(long = "target", required = true, num_args = 1..)]
     targets: Vec<String>,
 
-    #[arg(long, default_value = "41641,443,80,22")]
+    #[arg(long, default_value = "443,80")]
     ports: String,
 
     #[arg(long, default_value_t = 2000)]

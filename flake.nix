@@ -71,15 +71,11 @@
             HOST_CC = ccPath;
             HOST_CXX = cxxPath;
 
-            # `cc` crate prefers target-scoped compilers when cross-args are present.
-            # Setting these avoids falling back to nix's wrapped `clang` on Darwin.
             CC_aarch64_apple_darwin = ccPath;
             CXX_aarch64_apple_darwin = cxxPath;
 
             RUSTFLAGS = rustFlags;
 
-            # On Darwin, `cc` crate's default target flags trigger noisy
-            # cc-wrapper host/target mismatch warnings.
             CRATE_CC_NO_DEFAULTS = if pkgs.stdenv.isDarwin then "1" else "0";
 
             LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
@@ -104,9 +100,6 @@
               echo "error: failed to detect LLVM versions from rustc/clang"
               return 1
             fi
-
-            rust_llvm_major_minor=$(printf "%s" "$rust_llvm_version" | cut -d. -f1-2)
-            clang_llvm_major_minor=$(printf "%s" "$clang_llvm_version" | cut -d. -f1-2)
 
             if [ "$rust_llvm_major_minor" != "$clang_llvm_major_minor" ]; then
               echo "error: rustc LLVM ($rust_llvm_version) and clang LLVM ($clang_llvm_version) differ"
